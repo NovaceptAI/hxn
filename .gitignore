@@ -31,3 +31,19 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# SSL certificates and private keys
+*.crt
+*.key
+*.pem
+*.zip
+*.cer
+*.p7b
+*.p12
+*.pfx
+
+# nginx config (should be managed separately)
+nginx.conf
+
+# documentation (optional - remove this line if you want to track SUMMARY.md)
+SUMMARY.md
