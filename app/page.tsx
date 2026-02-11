@@ -10,6 +10,31 @@ interface Position {
   y: number
 }
 
+interface FloatingHeart {
+  id: number
+  x: number
+  y: number
+  speed: number
+  size: number
+}
+
+interface Arrow {
+  id: number
+  x: number
+  y: number
+  angle: number
+  speed: number
+}
+
+interface Particle {
+  id: number
+  x: number
+  y: number
+  vx: number
+  vy: number
+  life: number
+}
+
 export default function Home() {
   const [currentStep, setCurrentStep] = useState<ModalStep>('landing')
   const [mousePos, setMousePos] = useState<Position>({ x: 0, y: 0 })
@@ -18,10 +43,208 @@ export default function Home() {
   const [showFloatingHearts, setShowFloatingHearts] = useState(false)
   const [musicOn, setMusicOn] = useState(false)
   const [escPressCount, setEscPressCount] = useState(0)
+  const [visibleAnimals, setVisibleAnimals] = useState<number[]>([])
+  const [isShutterShaking, setIsShutterShaking] = useState(false)
+  const [timeRemaining, setTimeRemaining] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 })
+  const [showShutter, setShowShutter] = useState(true)
+  const [valentinesDay, setValentinesDay] = useState<number>(0)
+  
+  // Game state - using refs for game loop to avoid stale closures
+  const [bowAngle, setBowAngle] = useState(-90)
+  const [score, setScore] = useState(0)
+  const [gameRenderTick, setGameRenderTick] = useState(0)
+  const aimingLeft = useRef(false)
+  const aimingRight = useRef(false)
+  const heartsRef = useRef<FloatingHeart[]>([])
+  const arrowsRef = useRef<Arrow[]>([])
+  const particlesRef = useRef<Particle[]>([])
+  const bowAngleRef = useRef(-90)
   
   const noButtonRef = useRef<HTMLButtonElement>(null)
   const lastDodgeTime = useRef(0)
   const modalContentRef = useRef<HTMLDivElement>(null)
+  const heartIdCounter = useRef(0)
+  const arrowIdCounter = useRef(0)
+  const particleIdCounter = useRef(0)
+  const shutterRef = useRef<HTMLDivElement>(null)
+  const spawnTimerRef = useRef(0)
+
+  // Set Valentine's Day on client-side mount
+  useEffect(() => {
+    // February 14, 2026 at midnight IST (Indian Standard Time, UTC+5:30)
+    setValentinesDay(new Date('2026-02-14T00:00:00+05:30').getTime())
+  }, [])
+
+  // Update countdown timer
+  useEffect(() => {
+    if (!valentinesDay) return
+
+    const updateCountdown = () => {
+      const now = new Date().getTime()
+      const distance = valentinesDay - now
+
+      if (distance <= 0) {
+        setShowShutter(false)
+        setTimeRemaining({ days: 0, hours: 0, minutes: 0, seconds: 0 })
+        return
+      }
+
+      setTimeRemaining({
+        days: Math.floor(distance / (1000 * 60 * 60 * 24)),
+        hours: Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)),
+        minutes: Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60)),
+        seconds: Math.floor((distance % (1000 * 60)) / 1000),
+      })
+    }
+
+    updateCountdown()
+    const interval = setInterval(updateCountdown, 1000)
+    return () => clearInterval(interval)
+  }, [valentinesDay])
+
+  const handleShutterClick = () => {
+    setIsShutterShaking(true)
+    setTimeout(() => setIsShutterShaking(false), 500)
+  }
+
+  // Cupid's Arrow Game - Single game loop using requestAnimationFrame
+  useEffect(() => {
+    if (!showShutter) return
+
+    let animFrame: number
+    let lastSpawn = Date.now()
+
+    const gameLoop = () => {
+      const now = Date.now()
+
+      // Rotate bow
+      if (aimingLeft.current) bowAngleRef.current = Math.max(-170, bowAngleRef.current - 3)
+      if (aimingRight.current) bowAngleRef.current = Math.min(-10, bowAngleRef.current + 3)
+      setBowAngle(bowAngleRef.current)
+
+      // Spawn hearts every ~1.8s
+      if (now - lastSpawn > 1800) {
+        heartsRef.current.push({
+          id: heartIdCounter.current++,
+          x: Math.random() * 80 + 10,
+          y: 110,
+          speed: 0.25 + Math.random() * 0.3,
+          size: 30 + Math.random() * 20,
+        })
+        lastSpawn = now
+      }
+
+      // Move hearts upward
+      heartsRef.current = heartsRef.current
+        .map(h => ({ ...h, y: h.y - h.speed }))
+        .filter(h => h.y > -10)
+
+      // Move arrows
+      arrowsRef.current = arrowsRef.current
+        .map(a => ({
+          ...a,
+          x: a.x + Math.cos(a.angle) * a.speed,
+          y: a.y + Math.sin(a.angle) * a.speed,
+        }))
+        .filter(a => a.x > -5 && a.x < 105 && a.y > -5 && a.y < 105)
+
+      // Collision detection
+      const hitHeartIds = new Set<number>()
+      const hitArrowIds = new Set<number>()
+      let scoreInc = 0
+
+      for (const arrow of arrowsRef.current) {
+        for (const heart of heartsRef.current) {
+          if (hitHeartIds.has(heart.id) || hitArrowIds.has(arrow.id)) continue
+          const dx = arrow.x - heart.x
+          const dy = arrow.y - heart.y
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          if (dist < 5) {
+            hitHeartIds.add(heart.id)
+            hitArrowIds.add(arrow.id)
+            scoreInc++
+            // Burst particles
+            for (let i = 0; i < 6; i++) {
+              const a = (Math.PI * 2 * i) / 6
+              particlesRef.current.push({
+                id: particleIdCounter.current++,
+                x: heart.x, y: heart.y,
+                vx: Math.cos(a) * 1.5,
+                vy: Math.sin(a) * 1.5,
+                life: 25,
+              })
+            }
+          }
+        }
+      }
+
+      if (hitHeartIds.size > 0) {
+        heartsRef.current = heartsRef.current.filter(h => !hitHeartIds.has(h.id))
+        arrowsRef.current = arrowsRef.current.filter(a => !hitArrowIds.has(a.id))
+        setScore(prev => prev + scoreInc)
+      }
+
+      // Update particles
+      particlesRef.current = particlesRef.current
+        .map(p => ({ ...p, x: p.x + p.vx, y: p.y + p.vy, life: p.life - 1 }))
+        .filter(p => p.life > 0)
+
+      // Trigger re-render
+      setGameRenderTick(t => t + 1)
+
+      animFrame = requestAnimationFrame(gameLoop)
+    }
+
+    animFrame = requestAnimationFrame(gameLoop)
+    return () => cancelAnimationFrame(animFrame)
+  }, [showShutter])
+
+  // Shoot arrow
+  const shootArrow = () => {
+    const angleRad = (bowAngleRef.current * Math.PI) / 180
+    arrowsRef.current.push({
+      id: arrowIdCounter.current++,
+      x: 50,
+      y: 88,
+      angle: angleRad,
+      speed: 2.5,
+    })
+  }
+
+  // Keyboard controls
+  useEffect(() => {
+    if (!showShutter) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft' || e.key === 'a') aimingLeft.current = true
+      if (e.key === 'ArrowRight' || e.key === 'd') aimingRight.current = true
+      if (e.key === ' ' || e.key === 'ArrowUp') { e.preventDefault(); shootArrow() }
+    }
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft' || e.key === 'a') aimingLeft.current = false
+      if (e.key === 'ArrowRight' || e.key === 'd') aimingRight.current = false
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [showShutter, bowAngle])
+
+  // Animal positions around the Yes button (in a circle-ish pattern)
+  const animalPositions = [
+    { x: -80, y: -60, rotation: 25 },   // top-left
+    { x: 80, y: -60, rotation: -25 },   // top-right
+    { x: -100, y: 10, rotation: 15 },   // left
+    { x: 100, y: 10, rotation: -15 },   // right
+    { x: -70, y: 70, rotation: 10 },    // bottom-left
+    { x: 70, y: 70, rotation: -10 },    // bottom-right
+  ]
+
+  // Emoji placeholders (can replace with images later)
+  const animalEmojis = ['🐕', '🐱', '🐰', '🐦', '🐻', '🦊']
 
   // Lock body scroll when modal is open
   useEffect(() => {
@@ -79,11 +302,13 @@ export default function Home() {
       setDodgeAttempts(0)
       setEscPressCount(0)
       setNoButtonPos({ x: 50, y: 50 })
+      setVisibleAnimals([])
     } else {
       setCurrentStep('landing')
       setDodgeAttempts(0)
       setEscPressCount(0)
       setNoButtonPos({ x: 50, y: 50 })
+      setVisibleAnimals([])
     }
   }
 
@@ -145,6 +370,11 @@ export default function Home() {
     const newPos = getRandomPosition()
     setNoButtonPos(newPos)
     setDodgeAttempts(prev => prev + 1)
+    
+    // Show a new animal (max 6)
+    if (visibleAnimals.length < 6) {
+      setVisibleAnimals(prev => [...prev, prev.length])
+    }
   }
 
   const handleNoButtonTouchOrHover = (e: React.TouchEvent | React.MouseEvent) => {
@@ -155,6 +385,11 @@ export default function Home() {
     const newPos = getRandomPosition()
     setNoButtonPos(newPos)
     setDodgeAttempts(prev => prev + 1)
+    
+    // Show a new animal (max 6)
+    if (visibleAnimals.length < 6) {
+      setVisibleAnimals(prev => [...prev, prev.length])
+    }
   }
 
   const handleNoButtonPointerDown = (e: React.PointerEvent) => {
@@ -165,6 +400,11 @@ export default function Home() {
     const newPos = getRandomPosition()
     setNoButtonPos(newPos)
     setDodgeAttempts(prev => prev + 1)
+    
+    // Show a new animal (max 6)
+    if (visibleAnimals.length < 6) {
+      setVisibleAnimals(prev => [...prev, prev.length])
+    }
   }
 
   const handleYesClick = () => {
@@ -288,10 +528,38 @@ export default function Home() {
                   </div>
                 ) : (
                   // After first dodge: absolute positioning
-                  <>
+                  <div className="relative w-full h-full flex items-center justify-center">
+                    {/* Animals appearing around Yes button */}
+                    <AnimatePresence>
+                      {visibleAnimals.map((animalIndex) => (
+                        <motion.div
+                          key={animalIndex}
+                          className="absolute pointer-events-none z-0"
+                          style={{
+                            left: `calc(50% + ${animalPositions[animalIndex].x}px)`,
+                            top: `calc(50% + ${animalPositions[animalIndex].y}px)`,
+                            transform: `translate(-50%, -50%) rotate(${animalPositions[animalIndex].rotation}deg)`,
+                          }}
+                          initial={{ opacity: 0, scale: 0, y: 20 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          transition={{
+                            type: 'spring',
+                            damping: 15,
+                            stiffness: 300,
+                            delay: 0.1,
+                          }}
+                        >
+                          {/* Replace with <img src={`/animals/animal${animalIndex + 1}.png`} /> when you have images */}
+                          <span className="text-4xl filter drop-shadow-lg">
+                            {animalEmojis[animalIndex]}
+                          </span>
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
+                    
                     <button
                       onClick={handleYesClick}
-                      className="px-8 py-3 bg-valentine-accent text-white rounded-full hover:bg-valentine-deep transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2 z-10"
+                      className="px-8 py-3 bg-valentine-accent text-white rounded-full hover:bg-valentine-deep transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2 z-10 relative"
                       aria-label="Yes, I will be your Valentine"
                     >
                       Yes
@@ -312,7 +580,7 @@ export default function Home() {
                     >
                       No
                     </button>
-                  </>
+                  </div>
                 )}
               </div>
               {dodgeAttempts >= 3 && (
@@ -557,6 +825,208 @@ export default function Home() {
       {/* Modal System */}
       <AnimatePresence mode="wait">
         {renderModal()}
+      </AnimatePresence>
+
+      {/* Valentine's Day Shutter */}
+      <AnimatePresence>
+        {showShutter && (
+          <motion.div
+            ref={shutterRef}
+            className="fixed inset-0 z-[100] flex items-center justify-center select-none"
+            onClick={handleShutterClick}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, transition: { duration: 1 } }}
+          >
+
+            {/* Left curtain */}
+            <motion.div
+              className="absolute top-0 bottom-0 left-0 w-1/2 bg-gradient-to-r from-valentine-deep via-valentine-accent to-valentine-rose shadow-2xl"
+              animate={isShutterShaking ? { x: [0, -10, 10, -10, 10, 0] } : {}}
+              transition={{ duration: 0.5 }}
+              exit={{ x: '-100%', transition: { duration: 1 } }}
+            >
+              <div className="absolute inset-0 opacity-20" style={{
+                backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 50px, rgba(255,255,255,0.1) 50px, rgba(255,255,255,0.1) 51px)'
+              }} />
+            </motion.div>
+
+            {/* Right curtain */}
+            <motion.div
+              className="absolute top-0 bottom-0 right-0 w-1/2 bg-gradient-to-l from-valentine-deep via-valentine-accent to-valentine-rose shadow-2xl"
+              animate={isShutterShaking ? { x: [0, 10, -10, 10, -10, 0] } : {}}
+              transition={{ duration: 0.5 }}
+              exit={{ x: '100%', transition: { duration: 1 } }}
+            >
+              <div className="absolute inset-0 opacity-20" style={{
+                backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 50px, rgba(255,255,255,0.1) 50px, rgba(255,255,255,0.1) 51px)'
+              }} />
+            </motion.div>
+
+            {/* Game Elements Layer */}
+            <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
+              {/* Floating Hearts */}
+              {heartsRef.current.map(heart => (
+                <div
+                  key={heart.id}
+                  className="absolute"
+                  style={{
+                    left: `${heart.x}%`,
+                    top: `${heart.y}%`,
+                    fontSize: `${heart.size}px`,
+                    transform: 'translate(-50%, -50%)',
+                  }}
+                >
+                  💖
+                </div>
+              ))}
+
+              {/* Arrows */}
+              {arrowsRef.current.map(arrow => (
+                <div
+                  key={arrow.id}
+                  className="absolute text-xl"
+                  style={{
+                    left: `${arrow.x}%`,
+                    top: `${arrow.y}%`,
+                    transform: `translate(-50%, -50%) rotate(${arrow.angle + Math.PI / 4}rad)`,
+                  }}
+                >
+                  ➤
+                </div>
+              ))}
+
+              {/* Burst Particles */}
+              {particlesRef.current.map(particle => (
+                <div
+                  key={particle.id}
+                  className="absolute w-2 h-2 rounded-full"
+                  style={{
+                    left: `${particle.x}%`,
+                    top: `${particle.y}%`,
+                    opacity: particle.life / 25,
+                    background: 'linear-gradient(135deg, #f48fb1, #fff)',
+                    transform: 'translate(-50%, -50%)',
+                    boxShadow: '0 0 6px #f48fb1',
+                  }}
+                />
+              ))}
+
+              {/* Bow - fixed at bottom center */}
+              <div
+                className="absolute text-5xl"
+                style={{
+                  left: '50%',
+                  top: '88%',
+                  transform: `translate(-50%, -50%) rotate(${bowAngle + 45}deg)`,
+                  transition: 'transform 0.05s linear',
+                  filter: 'drop-shadow(0 0 8px rgba(255,255,255,0.5))',
+                }}
+              >
+                🏹
+              </div>
+
+              {/* Aim line (dotted) */}
+              <svg className="absolute inset-0 w-full h-full" style={{ pointerEvents: 'none' }}>
+                <line
+                  x1="50%"
+                  y1="88%"
+                  x2={`${50 + Math.cos(bowAngle * Math.PI / 180) * 15}%`}
+                  y2={`${88 + Math.sin(bowAngle * Math.PI / 180) * 15}%`}
+                  stroke="rgba(255,255,255,0.3)"
+                  strokeWidth="2"
+                  strokeDasharray="6 4"
+                />
+              </svg>
+            </div>
+
+            {/* Score Display */}
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white/20 backdrop-blur px-5 py-2 rounded-full text-white font-bold text-lg z-40 pointer-events-none">
+              💕 {score}
+            </div>
+
+            {/* Center content - Countdown */}
+            <motion.div 
+              className="relative z-10 text-center text-white px-8 pointer-events-none"
+              exit={{ opacity: 0, scale: 0.8, transition: { duration: 0.5 } }}
+            >
+              <motion.div
+                animate={isShutterShaking ? { rotate: [0, -5, 5, -5, 5, 0] } : {}}
+                transition={{ duration: 0.5 }}
+              >
+                <h1 className="text-6xl md:text-8xl font-serif mb-6 drop-shadow-2xl">💝</h1>
+                <h2 className="text-3xl md:text-5xl font-serif mb-4 drop-shadow-lg">
+                  Coming Soon
+                </h2>
+                <p className="text-lg md:text-xl mb-8 opacity-90">
+                  Something special awaits...
+                </p>
+                
+                {/* Countdown Timer */}
+                <div className="grid grid-cols-4 gap-4 max-w-lg mx-auto mb-6">
+                  <div className="bg-white/20 backdrop-blur rounded-2xl p-4">
+                    <div className="text-4xl md:text-5xl font-bold">{timeRemaining.days}</div>
+                    <div className="text-xs md:text-sm uppercase opacity-80 mt-1">Days</div>
+                  </div>
+                  <div className="bg-white/20 backdrop-blur rounded-2xl p-4">
+                    <div className="text-4xl md:text-5xl font-bold">{timeRemaining.hours}</div>
+                    <div className="text-xs md:text-sm uppercase opacity-80 mt-1">Hours</div>
+                  </div>
+                  <div className="bg-white/20 backdrop-blur rounded-2xl p-4">
+                    <div className="text-4xl md:text-5xl font-bold">{timeRemaining.minutes}</div>
+                    <div className="text-xs md:text-sm uppercase opacity-80 mt-1">Minutes</div>
+                  </div>
+                  <div className="bg-white/20 backdrop-blur rounded-2xl p-4">
+                    <div className="text-4xl md:text-5xl font-bold">{timeRemaining.seconds}</div>
+                    <div className="text-xs md:text-sm uppercase opacity-80 mt-1">Seconds</div>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+
+            {/* Game Controls - Bottom */}
+            <div className="absolute bottom-4 left-0 right-0 z-40 flex items-center justify-between px-6 md:px-12">
+              {/* Left - "Me" Direction Controls */}
+              <div className="flex flex-col items-center gap-1">
+                <span className="text-white/70 text-xs font-medium mb-1">Me</span>
+                <div className="flex gap-2">
+                  <button
+                    className="w-14 h-14 md:w-16 md:h-16 bg-white/25 backdrop-blur rounded-xl text-white text-2xl font-bold active:bg-white/40 transition-colors touch-manipulation"
+                    onMouseDown={() => { aimingLeft.current = true }}
+                    onMouseUp={() => { aimingLeft.current = false }}
+                    onMouseLeave={() => { aimingLeft.current = false }}
+                    onTouchStart={(e) => { e.preventDefault(); aimingLeft.current = true }}
+                    onTouchEnd={() => { aimingLeft.current = false }}
+                  >
+                    ◀
+                  </button>
+                  <button
+                    className="w-14 h-14 md:w-16 md:h-16 bg-white/25 backdrop-blur rounded-xl text-white text-2xl font-bold active:bg-white/40 transition-colors touch-manipulation"
+                    onMouseDown={() => { aimingRight.current = true }}
+                    onMouseUp={() => { aimingRight.current = false }}
+                    onMouseLeave={() => { aimingRight.current = false }}
+                    onTouchStart={(e) => { e.preventDefault(); aimingRight.current = true }}
+                    onTouchEnd={() => { aimingRight.current = false }}
+                  >
+                    ▶
+                  </button>
+                </div>
+              </div>
+
+              {/* Right - "You" Shoot Button */}
+              <div className="flex flex-col items-center gap-1">
+                <span className="text-white/70 text-xs font-medium mb-1">You</span>
+                <button
+                  className="w-20 h-14 md:w-24 md:h-16 bg-white/30 backdrop-blur rounded-xl text-white text-3xl active:bg-white/50 active:scale-95 transition-all touch-manipulation"
+                  onClick={(e) => { e.stopPropagation(); shootArrow() }}
+                  onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); shootArrow() }}
+                >
+                  💘
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
     </main>
   )
