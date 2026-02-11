@@ -48,6 +48,9 @@ export default function Home() {
   const [timeRemaining, setTimeRemaining] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 })
   const [showShutter, setShowShutter] = useState(true)
   const [valentinesDay, setValentinesDay] = useState<number>(0)
+  const [isPeeking, setIsPeeking] = useState(false)
+  const [catIndex, setCatIndex] = useState(0)
+  const catPeekCounter = useRef(0)
   
   // Game state - using refs for game loop to avoid stale closures
   const [bowAngle, setBowAngle] = useState(-90)
@@ -102,10 +105,22 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [valentinesDay])
 
-  const handleShutterClick = () => {
-    setIsShutterShaking(true)
-    setTimeout(() => setIsShutterShaking(false), 500)
-  }
+  // Auto-peek: curtains slightly open every 5 seconds, cat peeks, then close
+  useEffect(() => {
+    if (!showShutter) return
+
+    const peekInterval = setInterval(() => {
+      setCatIndex(catPeekCounter.current % 3)
+      catPeekCounter.current++
+      setIsPeeking(true)
+      // Close back after 1.5 seconds
+      setTimeout(() => {
+        setIsPeeking(false)
+      }, 1500)
+    }, 5000)
+
+    return () => clearInterval(peekInterval)
+  }, [showShutter])
 
   // Cupid's Arrow Game - Single game loop using requestAnimationFrame
   useEffect(() => {
@@ -833,7 +848,6 @@ export default function Home() {
           <motion.div
             ref={shutterRef}
             className="fixed inset-0 z-[100] flex items-center justify-center select-none"
-            onClick={handleShutterClick}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, transition: { duration: 1 } }}
@@ -841,9 +855,9 @@ export default function Home() {
 
             {/* Left curtain */}
             <motion.div
-              className="absolute top-0 bottom-0 left-0 w-1/2 bg-gradient-to-r from-valentine-deep via-valentine-accent to-valentine-rose shadow-2xl"
-              animate={isShutterShaking ? { x: [0, -10, 10, -10, 10, 0] } : {}}
-              transition={{ duration: 0.5 }}
+              className="absolute top-0 bottom-0 left-0 w-1/2 bg-gradient-to-r from-valentine-deep via-valentine-accent to-valentine-rose shadow-2xl z-[21]"
+              animate={isPeeking ? { x: '-8%' } : { x: '0%' }}
+              transition={{ type: 'spring', stiffness: 120, damping: 15 }}
               exit={{ x: '-100%', transition: { duration: 1 } }}
             >
               <div className="absolute inset-0 opacity-20" style={{
@@ -853,15 +867,44 @@ export default function Home() {
 
             {/* Right curtain */}
             <motion.div
-              className="absolute top-0 bottom-0 right-0 w-1/2 bg-gradient-to-l from-valentine-deep via-valentine-accent to-valentine-rose shadow-2xl"
-              animate={isShutterShaking ? { x: [0, 10, -10, 10, -10, 0] } : {}}
-              transition={{ duration: 0.5 }}
+              className="absolute top-0 bottom-0 right-0 w-1/2 bg-gradient-to-l from-valentine-deep via-valentine-accent to-valentine-rose shadow-2xl z-[21]"
+              animate={isPeeking ? { x: '8%' } : { x: '0%' }}
+              transition={{ type: 'spring', stiffness: 120, damping: 15 }}
               exit={{ x: '100%', transition: { duration: 1 } }}
             >
               <div className="absolute inset-0 opacity-20" style={{
                 backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 50px, rgba(255,255,255,0.1) 50px, rgba(255,255,255,0.1) 51px)'
               }} />
             </motion.div>
+
+            {/* Cat peeking from behind curtains */}
+            <AnimatePresence>
+              {isPeeking && (
+                <motion.div
+                  className="absolute z-20 flex flex-col items-center"
+                  style={{ left: '50%', top: '50%', transform: 'translate(-50%, -50%)' }}
+                  initial={{ y: 40, opacity: 0, scale: 0.5 }}
+                  animate={{ y: 0, opacity: 1, scale: 1 }}
+                  exit={{ y: 30, opacity: 0, scale: 0.6 }}
+                  transition={{ type: 'spring', stiffness: 200, damping: 12 }}
+                >
+                  <img
+                    src={`/cats/cat${catIndex + 1}.png`}
+                    alt="Peeking cat"
+                    className="w-24 h-24 md:w-36 md:h-36 object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,0.3)]"
+                    draggable={false}
+                  />
+                  <motion.span
+                    className="text-white text-sm md:text-base mt-2 bg-black/30 px-3 py-1 rounded-full backdrop-blur"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.3 }}
+                  >
+                    not yet! 😾
+                  </motion.span>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Game Elements Layer */}
             <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
@@ -947,7 +990,8 @@ export default function Home() {
 
             {/* Center content - Countdown */}
             <motion.div 
-              className="relative z-10 text-center text-white px-8 pointer-events-none"
+              className="relative z-25 text-center text-white px-8 pointer-events-none"
+              style={{ zIndex: 25 }}
               exit={{ opacity: 0, scale: 0.8, transition: { duration: 0.5 } }}
             >
               <motion.div
