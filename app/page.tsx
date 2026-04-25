@@ -1,524 +1,494 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useCallback, useMemo, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { memoryYears, type MemoryYear } from '@/data/memories'
 
-type ModalStep = 'landing' | 'modal1' | 'modal2' | 'modal3' | 'modal4' | 'modal5' | 'modal6'
+const DESKTOP_CANVAS = { width: 2000, height: 900 }
+const MOBILE_CANVAS = { width: 1080, height: 980 }
 
-interface Position {
-  x: number
-  y: number
+type Point = { x: number; y: number }
+type YearLayout = {
+  life: Point
+}
+
+const YEAR_LAYOUT_DESKTOP: Record<number, YearLayout> = {
+  2017: { life: { x: 0.03, y: 0.5 } },
+  2018: { life: { x: 0.13, y: 0.47 } },
+  2019: { life: { x: 0.24, y: 0.49 } },
+  2020: { life: { x: 0.34, y: 0.51 } },
+  2021: { life: { x: 0.45, y: 0.5 } },
+  2022: { life: { x: 0.55, y: 0.48 } },
+  2023: { life: { x: 0.66, y: 0.5 } },
+  2024: { life: { x: 0.76, y: 0.52 } },
+  2025: { life: { x: 0.87, y: 0.5 } },
+  2026: { life: { x: 0.97, y: 0.49 } },
+}
+
+const YEAR_LAYOUT_MOBILE: Record<number, YearLayout> = {
+  2017: { life: { x: 0.03, y: 0.5 } },
+  2018: { life: { x: 0.13, y: 0.47 } },
+  2019: { life: { x: 0.24, y: 0.49 } },
+  2020: { life: { x: 0.34, y: 0.52 } },
+  2021: { life: { x: 0.45, y: 0.5 } },
+  2022: { life: { x: 0.56, y: 0.47 } },
+  2023: { life: { x: 0.67, y: 0.5 } },
+  2024: { life: { x: 0.77, y: 0.53 } },
+  2025: { life: { x: 0.88, y: 0.5 } },
+  2026: { life: { x: 0.97, y: 0.49 } },
+}
+
+const LEAF_GEOMETRY = {
+  branchDx: 0.10,
+  branchDy: 0.195,
+  attachTs: [0.20, 0.50, 0.70, 0.90],
+  twigAngleOffsets: [-0.68, 0.18, -0.42, 0.26],
+  twigLengths: [0.038, 0.033, 0.029, 0.025],
+  twigLateralOffsets: [0, 0, 0, 0]
+}
+
+const DEFAULT_BRANCH_MONTHS = [2, 4, 8, 11]
+
+function getMonthFromDate(date: string): number {
+  const parts = date.split('-')
+  return Number(parts[1] ?? '1')
+}
+
+function monthShort(month: number): string {
+  return new Date(2026, month - 1, 1).toLocaleString('en-US', { month: 'short' })
+}
+
+function buildThreadPath(points: Array<{ x: number; y: number }>): string {
+  if (points.length < 2) return ''
+  let d = `M ${points[0].x} ${points[0].y}`
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1]
+    const curr = points[i]
+    const cx = (prev.x + curr.x) / 2
+    d += ` Q ${cx} ${prev.y} ${curr.x} ${curr.y}`
+  }
+  return d
+}
+
+function buildSmoothCurvePath(
+  start: Point,
+  end: Point,
+  bendSign: number,
+  strength = 0.12
+): string {
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const len = Math.hypot(dx, dy) || 1
+  const nx = -dy / len
+  const ny = dx / len
+  const offset = len * strength * bendSign
+  const c1: Point = {
+    x: start.x + dx * 0.34 + nx * offset,
+    y: start.y + dy * 0.34 + ny * offset,
+  }
+  const c2: Point = {
+    x: start.x + dx * 0.72 + nx * offset * 0.55,
+    y: start.y + dy * 0.72 + ny * offset * 0.55,
+  }
+  return `M ${start.x} ${start.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${end.x} ${end.y}`
+}
+
+function toCanvasPoint(p: Point, width: number, height: number): Point {
+  return { x: p.x * width, y: p.y * height }
+}
+
+function chipWidth(text: string, type: 'year' | 'month'): number {
+  const base = type === 'year' ? 56 : 30
+  return base + text.length * (type === 'year' ? 8 : 6)
+}
+
+function getDisplayMonths(events: MemoryYear['events']): number[] {
+  const uniqueMonths = Array.from(new Set(events.map(event => getMonthFromDate(event.date)))).sort((a, b) => a - b)
+  const picked = uniqueMonths.slice(0, 4)
+
+  for (const m of DEFAULT_BRANCH_MONTHS) {
+    if (picked.length >= 4) break
+    if (!picked.includes(m)) picked.push(m)
+  }
+
+  return picked.slice(0, 4).sort((a, b) => a - b)
 }
 
 export default function Home() {
-  const [currentStep, setCurrentStep] = useState<ModalStep>('landing')
-  const [mousePos, setMousePos] = useState<Position>({ x: 0, y: 0 })
-  const [noButtonPos, setNoButtonPos] = useState<Position>({ x: 50, y: 50 })
-  const [dodgeAttempts, setDodgeAttempts] = useState(0)
-  const [musicOn, setMusicOn] = useState(false)
-  const [escPressCount, setEscPressCount] = useState(0)
-  
-  const noButtonRef = useRef<HTMLButtonElement>(null)
-  const lastDodgeTime = useRef(0)
-  const modalContentRef = useRef<HTMLDivElement>(null)
+  const [selectedYear, setSelectedYear] = useState<MemoryYear | null>(null)
+  const [selectedMonth, setSelectedMonth] = useState<number | null>(null)
 
-  // Lock body scroll when modal is open
-  useEffect(() => {
-    if (currentStep !== 'landing') {
-      document.body.classList.add('no-scroll')
-    } else {
-      document.body.classList.remove('no-scroll')
-    }
-    return () => document.body.classList.remove('no-scroll')
-  }, [currentStep])
-
-  // Track mouse position
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      setMousePos({ x: e.clientX, y: e.clientY })
-    }
-    window.addEventListener('mousemove', handleMouseMove)
-    return () => window.removeEventListener('mousemove', handleMouseMove)
-  }, [])
-
-  // ESC key handling
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && currentStep !== 'landing') {
-        setEscPressCount(prev => prev + 1)
-        if (currentStep === 'modal3') {
-          // Don't close the yes/no modal with ESC, show exit modal instead
-          if (escPressCount >= 2) {
-            setCurrentStep('modal6')
-          }
-        } else if (currentStep !== 'modal6') {
-          closeModal()
+  const years = useMemo(() => [...memoryYears].sort((a, b) => a.year - b.year), [])
+  const buildNodes = useCallback(
+    (layoutMap: Record<number, YearLayout>, width: number, height: number) =>
+      years.map((year, yearIndex) => {
+        const layout = layoutMap[year.year]
+        const lifePoint = layout ? toCanvasPoint(layout.life, width, height) : { x: width / 2, y: height / 2 }
+        const direction = yearIndex % 2 === 0 ? -1 : 1
+        const tipPoint = {
+          x: lifePoint.x + width * LEAF_GEOMETRY.branchDx,
+          y: lifePoint.y + direction * height * LEAF_GEOMETRY.branchDy,
         }
-      }
-    }
-    window.addEventListener('keydown', handleEscape)
-    return () => window.removeEventListener('keydown', handleEscape)
-  }, [currentStep, escPressCount])
+        const months = getDisplayMonths(year.events)
+        const dx = tipPoint.x - lifePoint.x
+        const dy = tipPoint.y - lifePoint.y
+        const branchAngle = Math.atan2(dy, dx)
+        const nx = -Math.sin(branchAngle)
+        const ny = Math.cos(branchAngle)
+        const monthNodes = months.map((month, monthIndex) => {
+          const attachT = LEAF_GEOMETRY.attachTs[monthIndex] ?? LEAF_GEOMETRY.attachTs[LEAF_GEOMETRY.attachTs.length - 1]
+          const baseAttachX = lifePoint.x + dx * attachT
+          const baseAttachY = lifePoint.y + dy * attachT
+          const angle = branchAngle + (LEAF_GEOMETRY.twigAngleOffsets[monthIndex] ?? 0)
+          const lengthFactor = LEAF_GEOMETRY.twigLengths[monthIndex] ?? LEAF_GEOMETRY.twigLengths[LEAF_GEOMETRY.twigLengths.length - 1]
+          const length = width * lengthFactor
+          const lateralFactor =
+            LEAF_GEOMETRY.twigLateralOffsets[monthIndex] ??
+            LEAF_GEOMETRY.twigLateralOffsets[LEAF_GEOMETRY.twigLateralOffsets.length - 1] ??
+            0
+          const lateral = width * lateralFactor
+          const lateralX = nx * lateral
+          const lateralY = ny * lateral
+          const attachX = baseAttachX + lateralX
+          const attachY = baseAttachY + lateralY
+          const leafX = attachX + Math.cos(angle) * length
+          const leafY = attachY + Math.sin(angle) * length
+          return {
+            month,
+            index: monthIndex,
+            attachX,
+            attachY,
+            x: leafX,
+            y: leafY,
+          }
+        })
 
-  // Focus trap
-  useEffect(() => {
-    if (currentStep !== 'landing' && modalContentRef.current) {
-      const focusableElements = modalContentRef.current.querySelectorAll(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      )
-      if (focusableElements.length > 0) {
-        ;(focusableElements[0] as HTMLElement).focus()
-      }
-    }
-  }, [currentStep])
+        return {
+          year,
+          x: lifePoint.x,
+          lifeY: lifePoint.y,
+          direction,
+          tipX: tipPoint.x,
+          tipY: tipPoint.y,
+          months,
+          monthNodes,
+        }
+      }),
+    [years]
+  )
 
-  const closeModal = () => {
-    if (currentStep === 'modal6') {
-      setCurrentStep('landing')
-      setDodgeAttempts(0)
-      setEscPressCount(0)
-      setNoButtonPos({ x: 50, y: 50 })
-    } else {
-      setCurrentStep('landing')
-      setDodgeAttempts(0)
-      setEscPressCount(0)
-      setNoButtonPos({ x: 50, y: 50 })
-    }
+  const desktopNodes = useMemo(
+    () => buildNodes(YEAR_LAYOUT_DESKTOP, DESKTOP_CANVAS.width, DESKTOP_CANVAS.height),
+    [buildNodes]
+  )
+  const mobileNodes = useMemo(
+    () => buildNodes(YEAR_LAYOUT_MOBILE, MOBILE_CANVAS.width, MOBILE_CANVAS.height),
+    [buildNodes]
+  )
+
+  const buildLifePath = (nodes: Array<{ x: number; lifeY: number }>, width: number, height: number) => {
+    const midY = height * 0.5
+    const points = [
+      { x: 0, y: midY },
+      ...nodes.map(node => ({ x: node.x, y: node.lifeY })),
+      { x: width, y: midY + 8 },
+    ]
+    return buildThreadPath(points)
   }
 
-  const getRandomPosition = useCallback((): Position => {
-    if (!modalContentRef.current) return { x: 50, y: 50 }
-    
-    const modal = modalContentRef.current
-    const bounds = modal.getBoundingClientRect()
-    const padding = 16
-    const buttonWidth = 100
-    const buttonHeight = 44
-    
-    // Available space
-    const maxX = bounds.width - buttonWidth - padding * 2
-    const maxY = bounds.height - buttonHeight - padding * 2
-    
-    // Generate random position
-    const x = Math.random() * maxX + padding
-    const y = Math.random() * maxY + padding
-    
-    return { x, y }
-  }, [])
+  const lifeThreadPathDesktop = useMemo(
+    () => buildLifePath(desktopNodes, DESKTOP_CANVAS.width, DESKTOP_CANVAS.height),
+    [desktopNodes]
+  )
+  const lifeThreadPathMobile = useMemo(
+    () => buildLifePath(mobileNodes, MOBILE_CANVAS.width, MOBILE_CANVAS.height),
+    [mobileNodes]
+  )
+  const filteredEvents = useMemo(() => {
+    if (!selectedYear) return []
+    if (!selectedMonth) return selectedYear.events
+    return selectedYear.events.filter(event => getMonthFromDate(event.date) === selectedMonth)
+  }, [selectedMonth, selectedYear])
 
-  // No button dodge logic
-  useEffect(() => {
-    if (currentStep !== 'modal3' || !noButtonRef.current) return
-
-    const checkDistance = () => {
-      const now = Date.now()
-      if (now - lastDodgeTime.current < 250) return // Cooldown
-
-      const button = noButtonRef.current
-      if (!button) return
-
-      const rect = button.getBoundingClientRect()
-      const buttonCenterX = rect.left + rect.width / 2
-      const buttonCenterY = rect.top + rect.height / 2
-
-      const distance = Math.sqrt(
-        Math.pow(mousePos.x - buttonCenterX, 2) + 
-        Math.pow(mousePos.y - buttonCenterY, 2)
-      )
-
-      if (distance < 90) {
-        const newPos = getRandomPosition()
-        setNoButtonPos(newPos)
-        setDodgeAttempts(prev => prev + 1)
-        lastDodgeTime.current = now
-      }
-    }
-
-    checkDistance()
-  }, [mousePos, currentStep, getRandomPosition])
-
-  const handleNoButtonClick = (e: React.MouseEvent) => {
-    // Prevent actual clicks - just keep dodging
-    e.preventDefault()
-    e.stopPropagation()
-    const newPos = getRandomPosition()
-    setNoButtonPos(newPos)
-    setDodgeAttempts(prev => prev + 1)
+  const openYear = (year: MemoryYear) => {
+    setSelectedYear(year)
+    setSelectedMonth(null)
   }
 
-  const handleNoButtonTouchOrHover = (e: React.TouchEvent | React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    
-    // Always move on touch/hover
-    const newPos = getRandomPosition()
-    setNoButtonPos(newPos)
-    setDodgeAttempts(prev => prev + 1)
+  const openYearMonth = (year: MemoryYear, month: number) => {
+    setSelectedYear(year)
+    setSelectedMonth(month)
   }
 
-  const handleNoButtonPointerDown = (e: React.PointerEvent) => {
-    // Catch all pointer events (touch, mouse, pen)
-    e.preventDefault()
-    e.stopPropagation()
-    
-    const newPos = getRandomPosition()
-    setNoButtonPos(newPos)
-    setDodgeAttempts(prev => prev + 1)
-  }
-
-  const handleYesClick = () => {
-    setCurrentStep('modal4')
-  }
-
-  const renderModal = () => {
-    const modalVariants = {
-      hidden: { opacity: 0, scale: 0.95 },
-      visible: { opacity: 1, scale: 1 },
-      exit: { opacity: 0, scale: 0.95 }
-    }
-
-    const overlayVariants = {
-      hidden: { opacity: 0 },
-      visible: { opacity: 1 },
-      exit: { opacity: 0 }
-    }
-
-    const getProgressDots = () => {
-      const steps = ['modal1', 'modal2', 'modal3', 'modal4', 'modal5']
-      const currentIndex = steps.indexOf(currentStep)
-      if (currentIndex === -1) return null
-
-      return (
-        <div className="flex gap-1.5 justify-center mt-6" aria-label="Progress indicator">
-          {steps.map((_, index) => (
-            <div
-              key={index}
-              className={`w-1.5 h-1.5 rounded-full transition-colors ${
-                index <= currentIndex ? 'bg-valentine-accent' : 'bg-valentine-rose/30'
-              }`}
-            />
-          ))}
-        </div>
-      )
-    }
-
-    const modalContent = () => {
-      switch (currentStep) {
-        case 'modal1':
-          return (
-            <div className="text-center space-y-8">
-              <p className="text-lg leading-relaxed text-gray-700">
-                This isn't a question.<br />
-                It's just a moment.<br />
-                You can leave whenever you want.
-              </p>
-              <div className="flex gap-4 justify-center">
-                <button
-                  onClick={() => setCurrentStep('modal2')}
-                  className="px-8 py-3 bg-valentine-accent text-white rounded-full hover:bg-valentine-deep transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-                  aria-label="Continue with okay"
-                >
-                  okay
-                </button>
-                <button
-                  onClick={() => setCurrentStep('modal2')}
-                  className="px-8 py-3 bg-white text-valentine-accent border border-valentine-accent rounded-full hover:bg-valentine-pink transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-                  aria-label="Continue with hmm"
-                >
-                  hmm
-                </button>
-              </div>
-              {getProgressDots()}
-            </div>
-          )
-
-        case 'modal2':
-          return (
-            <div className="text-center space-y-8">
-              <p className="text-lg leading-relaxed text-gray-700">
-                You have a very specific kind of pretty.<br />
-                The kind that notices itself —<br />
-                and still pretends it didn't.
-              </p>
-              <button
-                onClick={() => setCurrentStep('modal3')}
-                className="px-8 py-3 bg-valentine-accent text-white rounded-full hover:bg-valentine-deep transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-                aria-label="Continue to next"
-              >
-                next
-              </button>
-              {getProgressDots()}
-            </div>
-          )
-
-        case 'modal3':
-          return (
-            <div className="text-center space-y-8 relative">
-              <h2 className="text-3xl font-serif text-valentine-accent">
-                Will you be my Valentine?
-              </h2>
-              <div className="relative min-h-[8rem] flex items-center justify-center">
-                {dodgeAttempts === 0 ? (
-                  // Initial state: buttons side by side
-                  <div className="flex gap-4 flex-wrap justify-center">
-                    <button
-                      onClick={handleYesClick}
-                      className="px-8 py-3 bg-valentine-accent text-white rounded-full hover:bg-valentine-deep transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-                      aria-label="Yes, I will be your Valentine"
-                    >
-                      Yes
-                    </button>
-                    <button
-                      onPointerDown={handleNoButtonPointerDown}
-                      onMouseEnter={() => {
-                        setDodgeAttempts(1)
-                      }}
-                      onTouchStart={handleNoButtonTouchOrHover}
-                      onClick={handleNoButtonClick}
-                      className="px-8 py-3 bg-white text-valentine-accent border border-valentine-accent rounded-full select-none touch-none transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-                      aria-label="No (but you can't click this)"
-                    >
-                      No
-                    </button>
-                  </div>
-                ) : (
-                  // After first dodge: absolute positioning
-                  <>
-                    <button
-                      onClick={handleYesClick}
-                      className="px-8 py-3 bg-valentine-accent text-white rounded-full hover:bg-valentine-deep transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2 z-10"
-                      aria-label="Yes, I will be your Valentine"
-                    >
-                      Yes
-                    </button>
-                    <button
-                      ref={noButtonRef}
-                      onPointerDown={handleNoButtonPointerDown}
-                      onMouseEnter={() => {}}
-                      onTouchStart={handleNoButtonTouchOrHover}
-                      onClick={handleNoButtonClick}
-                      className="px-8 py-3 bg-white text-valentine-accent border border-valentine-accent rounded-full select-none touch-none focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2 absolute pointer-events-auto"
-                      style={{
-                        left: `${noButtonPos.x}px`,
-                        top: `${noButtonPos.y}px`,
-                        transition: 'all 0.15s ease-out',
-                      }}
-                      aria-label="No (but you can't click this)"
-                    >
-                      No
-                    </button>
-                  </>
-                )}
-              </div>
-              {dodgeAttempts >= 3 && (
-                <p className="text-sm text-valentine-deep italic">
-                  okay okay, dramatic much.
-                </p>
-              )}
-              <button
-                onClick={() => setCurrentStep('modal6')}
-                className="text-xs text-gray-400 hover:text-valentine-accent transition-colors underline"
-                aria-label="Close gracefully"
-              >
-                close gracefully
-              </button>
-              {getProgressDots()}
-            </div>
-          )
-
-        case 'modal4':
-          return (
-            <div className="text-center space-y-8">
-              <p className="text-xl leading-relaxed text-gray-700">
-                Good choice.<br />
-                You have excellent instincts.
-              </p>
-              <p className="text-sm text-gray-500 italic">
-                (I already knew that.)
-              </p>
-              <button
-                onClick={() => setCurrentStep('modal5')}
-                className="px-8 py-3 bg-valentine-accent text-white rounded-full hover:bg-valentine-deep transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-                aria-label="Continue to one more thing"
-              >
-                one more thing
-              </button>
-              {getProgressDots()}
-            </div>
-          )
-
-        case 'modal5':
-          return (
-            <div className="text-center space-y-8">
-              <p className="text-lg leading-relaxed text-gray-700">
-                I don't rush people.<br />
-                I just enjoy them.<br />
-                And sometimes…<br />
-                I build things when words feel lazy.
-              </p>
-              <p className="text-sm text-valentine-deep font-serif italic">
-                — Nova
-              </p>
-              <div className="flex gap-4 justify-center">
-                <button
-                  onClick={() => setCurrentStep('modal6')}
-                  className="px-8 py-3 bg-valentine-accent text-white rounded-full hover:bg-valentine-deep transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-                  aria-label="Done"
-                >
-                  done
-                </button>
-                <button
-                  onClick={closeModal}
-                  className="px-8 py-3 bg-white text-valentine-accent border border-valentine-accent rounded-full hover:bg-valentine-pink transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-                  aria-label="Restart from beginning"
-                >
-                  restart
-                </button>
-              </div>
-              {getProgressDots()}
-            </div>
-          )
-
-        case 'modal6':
-          return (
-            <div className="text-center space-y-8">
-              <p className="text-lg leading-relaxed text-gray-700">
-                That's it, by the way.<br />
-                No follow-ups. No expectations.<br />
-                You can go be adorable now.
-              </p>
-              <button
-                onClick={closeModal}
-                className="px-8 py-3 bg-valentine-accent text-white rounded-full hover:bg-valentine-deep transition-all hover:scale-105 focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-                aria-label="Close gracefully and return to start"
-              >
-                close gracefully
-              </button>
-            </div>
-          )
-
-        default:
-          return null
-      }
-    }
-
-    if (currentStep === 'landing') return null
+  const renderTimeline = (
+    nodes: Array<{
+      year: MemoryYear
+      x: number
+      lifeY: number
+      direction: number
+      tipX: number
+      tipY: number
+      monthNodes: Array<{ month: number; attachX: number; attachY: number; x: number; y: number }>
+    }>,
+    canvas: { width: number; height: number },
+    lifePath: string,
+    variant: 'mobile' | 'desktop'
+  ) => {
+    const glowId = `threadGlow-${variant}`
+    const emberId = `emberGlow-${variant}`
 
     return (
-      <>
-        <motion.div
-          className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40"
-          variants={overlayVariants}
-          initial="hidden"
-          animate="visible"
-          exit="exit"
-          onClick={currentStep !== 'modal3' ? closeModal : undefined}
-          aria-hidden="true"
-        />
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 pointer-events-none">
-          <motion.div
-            ref={modalContentRef}
-            className="bg-white/95 backdrop-blur rounded-3xl shadow-2xl p-8 md:p-12 max-w-lg w-full pointer-events-auto relative border border-valentine-rose/20"
-            variants={modalVariants}
-            initial="hidden"
-            animate="visible"
-            exit="exit"
-            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="modal-title"
-          >
-            {currentStep !== 'modal3' && currentStep !== 'modal6' && (
-              <button
-                onClick={closeModal}
-                className="absolute top-4 right-4 text-gray-400 hover:text-valentine-accent transition-colors w-8 h-8 flex items-center justify-center rounded-full hover:bg-valentine-pink focus:outline-none focus:ring-2 focus:ring-valentine-accent"
-                aria-label="Close modal"
-              >
-                ✕
-              </button>
-            )}
-            {modalContent()}
-          </motion.div>
+      <div
+        className={`hide-scrollbar relative z-10 w-full overflow-x-auto rounded-[2rem] border border-[#3f2d22] bg-[#130d0a] shadow-[inset_0_0_80px_rgba(0,0,0,0.8),0_20px_70px_rgba(0,0,0,0.45)] ${
+          variant === 'mobile' ? 'h-[68vh]' : 'h-[78vh]'
+        }`}
+      >
+        <div className={`relative h-full ${variant === 'mobile' ? 'min-w-[1080px]' : 'min-w-[2000px]'}`}>
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_18%,rgba(255,206,131,0.22),transparent_35%),radial-gradient(circle_at_80%_70%,rgba(255,105,61,0.12),transparent_40%),linear-gradient(180deg,rgba(0,0,0,0.28),rgba(0,0,0,0.62))]" />
+          <div className="pointer-events-none absolute inset-0 opacity-25 bg-[repeating-linear-gradient(0deg,transparent,transparent_6px,rgba(255,255,255,0.03)_6px,rgba(255,255,255,0.03)_7px)]" />
+          <svg viewBox={`0 0 ${canvas.width} ${canvas.height}`} className="absolute inset-0 h-full w-full" aria-hidden="true">
+            <defs>
+              <filter id={glowId} x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="3.8" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <filter id={emberId} x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="2.4" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+
+            <path
+              d={`M 0 116 Q ${canvas.width / 2} 42 ${canvas.width} 108`}
+              stroke="#f15535"
+              strokeWidth="6"
+              strokeLinecap="round"
+              fill="none"
+              filter={`url(#${emberId})`}
+              opacity="0.95"
+            />
+            <path
+              d={`M 0 ${canvas.height - 116} Q ${canvas.width / 2} ${canvas.height - 38} ${canvas.width} ${canvas.height - 108}`}
+              stroke="#f15535"
+              strokeWidth="6"
+              strokeLinecap="round"
+              fill="none"
+              filter={`url(#${emberId})`}
+              opacity="0.95"
+            />
+
+            <path d={lifePath} stroke="#ffbfa0" strokeWidth="10" strokeLinecap="round" fill="none" filter={`url(#${glowId})`} opacity="0.32" />
+            <path d={lifePath} stroke="#f3f7ff" strokeWidth="4.4" strokeLinecap="round" fill="none" filter={`url(#${glowId})`} />
+
+            {nodes.map((node) => {
+              const branchDx = node.tipX - node.x
+              const branchDy = node.tipY - node.lifeY
+              const branchLen = Math.hypot(branchDx, branchDy) || 1
+
+              // Reconstruct cubic Bezier control points (matches buildSmoothCurvePath)
+              const bendSign = node.direction < 0 ? -1 : 1
+              const crvNx = -branchDy / branchLen
+              const crvNy =  branchDx / branchLen
+              const crvOff = branchLen * 0.12 * bendSign
+
+              const p0x = node.x,    p0y = node.lifeY
+              const p3x = node.tipX, p3y = node.tipY
+              const p1x = p0x + branchDx * 0.34 + crvNx * crvOff
+              const p1y = p0y + branchDy * 0.34 + crvNy * crvOff
+              const p2x = p0x + branchDx * 0.72 + crvNx * crvOff * 0.55
+              const p2y = p0y + branchDy * 0.72 + crvNy * crvOff * 0.55
+
+              // Evaluate cubic Bezier at t = 0.3 for true on-curve attach point
+              const twigT = 0.3
+              const mt = 1 - twigT, mt2 = mt * mt, mt3 = mt2 * mt
+              const t2 = twigT * twigT, t3 = t2 * twigT
+
+              const twigAttachX = mt3*p0x + 3*mt2*twigT*p1x + 3*mt*t2*p2x + t3*p3x
+              const twigAttachY = mt3*p0y + 3*mt2*twigT*p1y + 3*mt*t2*p2y + t3*p3y
+
+              // Tangent at t = 0.3
+              const tanX = 3*mt2*(p1x - p0x) + 6*mt*twigT*(p2x - p1x) + 3*t2*(p3x - p2x)
+              const tanY = 3*mt2*(p1y - p0y) + 6*mt*twigT*(p2y - p1y) + 3*t2*(p3y - p2y)
+              const tanLen = Math.hypot(tanX, tanY) || 1
+              const tux = tanX / tanLen
+              const tuy = tanY / tanLen
+
+              // Outward normal (perpendicular to tangent, away from life thread)
+              const n1x = -tuy, n1y = tux
+              const n2x =  tuy, n2y = -tux
+              const useOutN1 = n1y * node.direction > 0
+              const nx = useOutN1 ? n1x : n2x
+              const ny = useOutN1 ? n1y : n2y
+
+              // Twig: leaf-vein style — angles outward + backward toward branch root
+              const epsilon = 4                    // px, clears branch stroke width
+              const twigLength = branchLen * 0.22  // reach of the vein
+
+              // Vein direction: blend of outward normal + backward along branch
+              // ~40° off the branch, angled back toward the life-thread
+              const vdx = nx * 0.6 + (-tux) * 0.8
+              const vdy = ny * 0.6 + (-tuy) * 0.8
+              const vLen = Math.hypot(vdx, vdy) || 1
+              const vux = vdx / vLen
+              const vuy = vdy / vLen
+
+              const bx = twigAttachX + vux * epsilon
+              const by = twigAttachY + vuy * epsilon
+              // End point along the vein direction
+              const ex = twigAttachX + vux * twigLength
+              const ey = twigAttachY + vuy * twigLength
+              // Control point: slightly more outward-normal for a gentle curve
+              const cpx = twigAttachX + vux * twigLength * 0.55 + nx * twigLength * 0.18
+              const cpy = twigAttachY + vuy * twigLength * 0.55 + ny * twigLength * 0.18
+
+              const mainPath = buildSmoothCurvePath(
+                { x: node.x, y: node.lifeY },
+                { x: node.tipX, y: node.tipY },
+                node.direction < 0 ? -1 : 1,
+                0.12
+              )
+              const twigPath = `M ${twigAttachX} ${twigAttachY} L ${bx} ${by} Q ${cpx} ${cpy}, ${ex} ${ey}`
+              return (
+                <g key={`line-${variant}-${node.year.year}`}>
+                  <path d={mainPath} stroke="#ffcfad" strokeWidth="8" fill="none" strokeLinecap="round" strokeLinejoin="round" filter={`url(#${glowId})`} opacity="0.42" />
+                  <path d={mainPath} stroke="#f7e8de" strokeWidth="3.2" fill="none" strokeLinecap="round" strokeLinejoin="round" filter={`url(#${glowId})`} />
+                  <path d={twigPath} stroke="#ffc89f" strokeWidth="3.1" fill="none" strokeLinecap="round" strokeLinejoin="round" filter={`url(#${glowId})`} opacity="0.36" />
+                  <path d={twigPath} stroke="#fff2e8" strokeWidth="1.35" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                </g>
+              )
+            })}
+
+            {nodes.map((node) => {
+              const yearLabel = String(node.year.year)
+              const yearW = chipWidth(yearLabel, 'year')
+              const yearH = 50
+              const yearX = node.x - yearW / 2
+              const yearY = node.lifeY + (node.direction < 0 ? -58 : 10)
+
+              return (
+                <g key={`year-chip-${variant}-${node.year.year}`} onClick={() => openYear(node.year)} style={{ cursor: 'pointer' }}>
+                  <rect x={yearX} y={yearY} width={yearW} height={yearH} rx="18" fill="rgba(20, 14, 13, 0.82)" stroke="rgba(255, 201, 162, 0.9)" strokeWidth="2" filter={`url(#${emberId})`} />
+                  <text x={node.x} y={yearY + 33} fill="#ffd8ba" textAnchor="middle" fontSize={variant === 'mobile' ? '38' : '34'} style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif', fontWeight: 700 }}>
+                    {yearLabel}
+                  </text>
+                </g>
+              )
+            })}
+
+          </svg>
         </div>
-      </>
+      </div>
     )
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center p-4 relative z-10">
-      {/* Landing Hero */}
+    <main className="min-h-screen relative overflow-hidden p-3 md:p-6">
+      <header className="relative z-20 text-center pt-6 pb-4">
+        <h1 className="text-3xl md:text-5xl text-valentine-accent font-serif">Our Memory Threads</h1>
+        <p className="text-sm md:text-base text-gray-700 mt-2">
+          Life thread in the center. Year branches alternate up and down.
+        </p>
+      </header>
+
+      <div className="md:hidden">
+        {renderTimeline(mobileNodes, MOBILE_CANVAS, lifeThreadPathMobile, 'mobile')}
+      </div>
+      <div className="hidden md:block">
+        {renderTimeline(desktopNodes, DESKTOP_CANVAS, lifeThreadPathDesktop, 'desktop')}
+      </div>
+
       <AnimatePresence>
-        {currentStep === 'landing' && (
-          <motion.div
-            className="text-center space-y-8 max-w-2xl"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.6 }}
-          >
-            <motion.h1
-              className="text-5xl md:text-6xl font-serif text-valentine-accent mb-4"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2, duration: 0.6 }}
-            >
-              Hi Himanshi 🌸
-            </motion.h1>
-            <motion.div
-              className="space-y-2"
+        {selectedYear && (
+          <>
+            <motion.button
+              type="button"
+              aria-label="Close year panel"
+              className="fixed inset-0 bg-black/25 backdrop-blur-sm z-30"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ delay: 0.4, duration: 0.6 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedYear(null)}
+            />
+            <motion.section
+              className="fixed left-0 right-0 bottom-0 z-40 max-h-[84vh] overflow-y-auto rounded-t-3xl bg-white/95 border-t border-valentine-rose/30 shadow-2xl p-5 md:max-w-2xl md:left-1/2 md:-translate-x-1/2 md:bottom-6 md:rounded-3xl"
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', stiffness: 220, damping: 26 }}
             >
-              <p className="text-xl text-gray-700 leading-relaxed">
-                I made something small.
-              </p>
-              <p className="text-xl text-gray-700 leading-relaxed">
-                Not important. Just curious.
-              </p>
-            </motion.div>
-            <motion.button
-              onClick={() => setCurrentStep('modal1')}
-              className="px-12 py-4 bg-valentine-accent text-white rounded-full text-lg hover:bg-valentine-deep transition-all hover:scale-105 shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-valentine-accent focus:ring-offset-2"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.6, duration: 0.4 }}
-              whileHover={{ y: -2 }}
-              whileTap={{ scale: 0.95 }}
-              aria-label="Open the Valentine message"
-            >
-              open it
-            </motion.button>
-          </motion.div>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-2xl font-serif text-valentine-accent">{selectedYear.year}</h2>
+                  <p className="text-sm text-gray-600 mt-1">{selectedYear.title}</p>
+                </div>
+                <button
+                  type="button"
+                  className="w-9 h-9 rounded-full bg-valentine-pink text-valentine-accent"
+                  onClick={() => setSelectedYear(null)}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p className="mt-3 text-sm text-gray-700">{selectedYear.summary}</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={`text-xs px-3 py-1.5 rounded-full border ${
+                    selectedMonth === null
+                      ? 'bg-valentine-accent text-white border-valentine-accent'
+                      : 'bg-white text-valentine-accent border-valentine-rose/40'
+                  }`}
+                  onClick={() => setSelectedMonth(null)}
+                >
+                  All Months
+                </button>
+                {Array.from(new Set(selectedYear.events.map(event => getMonthFromDate(event.date))))
+                  .sort((a, b) => a - b)
+                  .map((month) => (
+                    <button
+                      key={`filter-${selectedYear.year}-${month}`}
+                      type="button"
+                      className={`text-xs px-3 py-1.5 rounded-full border ${
+                        selectedMonth === month
+                          ? 'bg-valentine-accent text-white border-valentine-accent'
+                          : 'bg-white text-valentine-accent border-valentine-rose/40'
+                      }`}
+                      onClick={() => setSelectedMonth(month)}
+                    >
+                      {monthShort(month)}
+                    </button>
+                  ))}
+              </div>
+
+              <div className="mt-4 grid gap-3">
+                {filteredEvents.map((event) => (
+                  <article key={event.id} className="rounded-2xl border border-valentine-rose/30 bg-white p-4">
+                    <p className="text-xs tracking-wide uppercase text-gray-500">{event.date}</p>
+                    <h3 className="text-base font-semibold text-valentine-accent mt-1">{event.title}</h3>
+                    <p className="text-sm text-gray-600 mt-1">{event.description}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {event.tags.map((tag) => (
+                        <span key={tag} className="text-xs px-2 py-1 rounded-full bg-valentine-pink text-valentine-accent">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+                {filteredEvents.length === 0 && (
+                  <p className="text-sm text-gray-500">No memories found for this month yet.</p>
+                )}
+              </div>
+            </motion.section>
+          </>
         )}
-      </AnimatePresence>
-
-      {/* Footer */}
-      <motion.div
-        className="absolute bottom-8 text-center"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 1, duration: 0.6 }}
-      >
-        <p className="text-sm text-gray-500">made by Nova</p>
-      </motion.div>
-
-      {/* Music Toggle UI (non-functional, just UI) */}
-      <motion.button
-        onClick={() => setMusicOn(!musicOn)}
-        className="fixed top-6 right-6 w-10 h-10 flex items-center justify-center rounded-full bg-white/80 backdrop-blur shadow-lg hover:shadow-xl transition-all hover:scale-110 focus:outline-none focus:ring-2 focus:ring-valentine-accent z-50"
-        initial={{ opacity: 0, scale: 0 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ delay: 0.8 }}
-        aria-label={musicOn ? "Music on (UI only)" : "Music off (UI only)"}
-        title="Music toggle (UI only)"
-      >
-        <span className="text-lg">{musicOn ? '🔈' : '🔇'}</span>
-      </motion.button>
-
-      {/* Modal System */}
-      <AnimatePresence mode="wait">
-        {renderModal()}
       </AnimatePresence>
     </main>
   )
