@@ -15,7 +15,6 @@ export default function Home() {
   const [mousePos, setMousePos] = useState<Position>({ x: 0, y: 0 })
   const [noButtonPos, setNoButtonPos] = useState<Position>({ x: 50, y: 50 })
   const [dodgeAttempts, setDodgeAttempts] = useState(0)
-  const [showFloatingHearts, setShowFloatingHearts] = useState(false)
   const [musicOn, setMusicOn] = useState(false)
   const [escPressCount, setEscPressCount] = useState(0)
   
@@ -168,11 +167,7 @@ export default function Home() {
   }
 
   const handleYesClick = () => {
-    setShowFloatingHearts(true)
-    setTimeout(() => {
-      setShowFloatingHearts(false)
-      setCurrentStep('modal4')
-    }, 1500)
+    setCurrentStep('modal4')
   }
 
   const renderModal = () => {
@@ -275,7 +270,7 @@ export default function Home() {
                     </button>
                     <button
                       onPointerDown={handleNoButtonPointerDown}
-                      onMouseEnter={(e) => {
+                      onMouseEnter={() => {
                         setDodgeAttempts(1)
                       }}
                       onTouchStart={handleNoButtonTouchOrHover}
@@ -520,39 +515,6 @@ export default function Home() {
       >
         <span className="text-lg">{musicOn ? '🔈' : '🔇'}</span>
       </motion.button>
-
-      {/* Floating Hearts Animation */}
-      <AnimatePresence>
-        {showFloatingHearts && (
-          <div className="fixed inset-0 pointer-events-none z-50">
-            {[...Array(8)].map((_, i) => (
-              <motion.div
-                key={i}
-                className="absolute text-4xl"
-                initial={{
-                  x: '50vw',
-                  y: '50vh',
-                  opacity: 0,
-                  scale: 0,
-                }}
-                animate={{
-                  x: `${50 + (Math.random() - 0.5) * 40}vw`,
-                  y: `${20 + (Math.random() - 0.5) * 20}vh`,
-                  opacity: [0, 1, 0],
-                  scale: [0, 1, 0.8],
-                }}
-                transition={{
-                  duration: 1.5,
-                  delay: i * 0.1,
-                  ease: 'easeOut',
-                }}
-              >
-                💖
-              </motion.div>
-            ))}
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* Modal System */}
       <AnimatePresence mode="wait">
